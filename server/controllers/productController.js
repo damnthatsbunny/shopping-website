@@ -41,6 +41,84 @@ const sortProducts = (sort) => {
   return map[sort] || { createdAt: -1 };
 };
 
+const slugify = (value) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+const badRequest = (message) => Object.assign(new Error(message), { status: 400 });
+
+const resolveReference = async (Model, value, label) => {
+  if (!value) throw badRequest(`${label} is required`);
+
+  const query = mongoose.Types.ObjectId.isValid(value)
+    ? { _id: value, isActive: true }
+    : { name: String(value).trim(), isActive: true };
+  const document = await Model.findOne(query);
+  if (!document) throw badRequest(`${label} was not found`);
+  return document._id;
+};
+
+const parseList = (value) => {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (typeof value === 'string') return value.split(',').map((item) => item.trim()).filter(Boolean);
+  return [];
+};
+
+const normalizeProductFields = async (body, partial = false) => {
+  const fields = {};
+  const has = (key) => Object.prototype.hasOwnProperty.call(body, key);
+
+  if (!partial || has('name')) {
+    fields.name = String(body.name || '').trim();
+    if (!fields.name) throw badRequest('Product name is required');
+    fields.slug = slugify(fields.name);
+  }
+  if (!partial || has('description')) {
+    fields.description = String(body.description || '').trim();
+    if (!fields.description) throw badRequest('Product description is required');
+  }
+  if (!partial || has('category')) fields.category = await resolveReference(Category, body.category, 'Category');
+  if (!partial || has('brand')) fields.brand = await resolveReference(Brand, body.brand, 'Brand');
+
+  for (const key of ['price', 'originalPrice', 'stock']) {
+    if (!has(key) && partial) continue;
+    const value = key === 'originalPrice' && body[key] == null ? body.price : body[key];
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0 || (key === 'stock' && !Number.isInteger(number))) {
+      throw badRequest(`${key} must be a valid ${key === 'stock' ? 'whole number' : 'non-negative number'}`);
+    }
+    fields[key] = number;
+  }
+
+  if (has('images') || !partial) {
+    fields.images = parseList(body.images);
+    if (!fields.images.length) throw badRequest('At least one image URL is required');
+    for (const image of fields.images) {
+      let url;
+      try {
+        url = new URL(image);
+      } catch {
+        throw badRequest('Image URLs must be absolute HTTP or HTTPS URLs');
+      }
+      if (url.protocol !== 'https:') {
+        throw badRequest('Image URLs must use HTTPS');
+      }
+    }
+  }
+
+  for (const key of ['sizes', 'colors', 'keywords']) {
+    if (has(key)) fields[key] = parseList(body[key]);
+  }
+  for (const key of ['featured', 'trending', 'recommended']) {
+    if (has(key)) fields[key] = body[key] === true || body[key] === 'true';
+  }
+
+  return fields;
+};
+
+const sendProductError = (res, error, fallback) => {
+  const status = error.status || (error.code === 11000 ? 409 : error.name === 'ValidationError' || error.name === 'CastError' ? 400 : 500);
+  res.status(status).json({ message: error.message || fallback });
+};
+
 export const getProducts = async (req, res) => {
   try {
     const query = buildQuery(req);
@@ -69,7 +147,10 @@ export const getProducts = async (req, res) => {
 
 export const getProductById = async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id)
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+    const product = await Product.findOne({ _id: req.params.id, isActive: true })
       .populate('category')
       .populate('brand')
       .populate('reviews.user', 'name avatar');
@@ -90,56 +171,36 @@ export const getProductById = async (req, res) => {
 
 export const createProduct = async (req, res) => {
   try {
-    const { name, description, category, brand, price, originalPrice, stock, images, sizes, colors, keywords, featured, trending, recommended } = req.body;
-
-    const sanitizedName = name?.trim();
-    if (!sanitizedName || !description || !category || !brand || !price) {
-      return res.status(400).json({ message: 'Missing required product fields' });
-    }
-
-    const product = await Product.create({
-      name: sanitizedName,
-      slug: sanitizedName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-      description,
-      category,
-      brand,
-      price: Number(price),
-      originalPrice: Number(originalPrice || price),
-      stock: Number(stock || 0),
-      images: images || ['https://images.unsplash.com/photo-1521572267360-ee0c2909d518?auto=format&fit=crop&w=800&q=80'],
-      sizes: sizes || [],
-      colors: colors || [],
-      keywords: keywords || [],
-      featured: Boolean(featured),
-      trending: Boolean(trending),
-      recommended: Boolean(recommended),
-    });
+    const product = await Product.create(await normalizeProductFields(req.body));
 
     res.status(201).json(product);
   } catch (error) {
-    res.status(500).json({ message: error.message || 'Product creation failed' });
+    sendProductError(res, error, 'Product creation failed');
   }
 };
 
 export const updateProduct = async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
 
-    Object.assign(product, req.body);
-    if (req.body.name) {
-      product.slug = req.body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    }
+    Object.assign(product, await normalizeProductFields(req.body, true));
 
     const updated = await product.save();
     res.json(updated);
   } catch (error) {
-    res.status(500).json({ message: error.message || 'Product update failed' });
+    sendProductError(res, error, 'Product update failed');
   }
 };
 
 export const deleteProduct = async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
 
@@ -147,7 +208,7 @@ export const deleteProduct = async (req, res) => {
     await product.save();
     res.json({ message: 'Product deleted successfully' });
   } catch (error) {
-    res.status(500).json({ message: error.message || 'Product deletion failed' });
+    sendProductError(res, error, 'Product deletion failed');
   }
 };
 

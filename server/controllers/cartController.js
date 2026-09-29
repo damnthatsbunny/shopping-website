@@ -25,6 +25,7 @@ export const addToCart = async (req, res) => {
 
     const product = await Product.findById(productId);
     if (!product) return res.status(404).json({ message: 'Product not found' });
+    if (!product.isActive) return res.status(400).json({ message: 'This product is no longer available' });
     if (product.stock < quantity) return res.status(400).json({ message: `Only ${product.stock} units left for ${product.name}` });
     const variantError = validateVariants(product, size, color);
     if (variantError) return res.status(400).json({ message: variantError });
@@ -63,6 +64,7 @@ export const updateCartItem = async (req, res) => {
     if (!item) return res.status(404).json({ message: 'Cart item not found' });
     const product = await Product.findById(item.product);
     if (!product) return res.status(404).json({ message: 'Product no longer exists' });
+    if (!product.isActive) return res.status(400).json({ message: 'This product is no longer available' });
     if (quantity > product.stock) return res.status(400).json({ message: `Only ${product.stock} units left for ${product.name}` });
 
     item.quantity = quantity;

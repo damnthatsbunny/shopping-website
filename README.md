@@ -66,6 +66,16 @@ This resets the configured database and creates:
 - coupons
 - admin account
 
+`npm run seed` drops and recreates the configured database. To add the catalog sample products to an existing MongoDB database without deleting existing data, set `MONGO_URI` and run:
+
+```bash
+npm run seed:products
+```
+
+This product seeder is safe to rerun; existing products are preserved. When `MONGO_URI` is unset, local development uses a temporary in-memory MongoDB and initializes demo products on each server start. Those local records do not persist after the server stops.
+
+Admins can add, edit, delete, and update stock from `/admin/products`. Product images should be entered as full HTTPS image URLs. Category and brand options are read from MongoDB; use the database seed setup above before managing a fresh database.
+
 ## Running the app
 
 Start backend:

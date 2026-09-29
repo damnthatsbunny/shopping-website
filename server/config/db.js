@@ -7,6 +7,10 @@ const connectDB = async () => {
   const mongoUri = process.env.MONGO_URI;
 
   try {
+    if (process.env.NODE_ENV === 'production' && !mongoUri) {
+      throw new Error('MONGO_URI must be set in production.');
+    }
+
     if (mongoUri) {
       await mongoose.connect(mongoUri);
       console.log('MongoDB connected');
