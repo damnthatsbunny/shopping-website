@@ -1,0 +1,20 @@
+{
+  "name": "urbancart-shop",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "server": "npm --prefix server start",
+    "client": "npm --prefix client run dev -- --host 0.0.0.0",
+    "build": "npm --prefix client run build",
+    "seed": "npm --prefix server run seed",
+    "seed:products": "npm --prefix server run seed:products"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
